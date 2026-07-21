@@ -1,4 +1,4 @@
-module bpm_node
+module imdb_node
 
 go 1.26.5
 
