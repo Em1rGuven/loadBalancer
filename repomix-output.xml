@@ -1,0 +1,458 @@
+This file is a merged representation of the entire codebase, combined into a single document by Repomix.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of the entire repository's contents.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+backend/
+  node/
+    go.mod
+    main.go
+    server.go
+    types.go
+services/
+  getMovieRating.go
+  newServiceContainer.go
+storage/
+  storage.go
+go.mod
+healthCheck.go
+main.go
+server.go
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path="backend/node/server.go">
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"strconv"
+	"time"
+
+	"github.com/gofiber/fiber/v2"
+)
+
+func newServer() *Server {
+	app := fiber.New()
+	client := &http.Client{Timeout: 2 * time.Second}
+
+	server := &Server{
+		app:    app,
+		client: client,
+	}
+	server.routes()
+	return server
+}
+
+func (s *Server) routes() {
+	s.app.Get("/rating/:movie", func(c *fiber.Ctx) error {
+		movie := c.Params("movie")
+		safeMovie := url.QueryEscape(movie)
+
+		req, err := http.NewRequest("GET", fmt.Sprintf("http://www.omdbapi.com/?apikey=%v&t=%v", API_KEY, safeMovie), nil)
+		if err != nil {
+			return err
+		}
+
+		response, err := s.client.Do(req)
+		if err != nil {
+			return err
+		}
+		defer response.Body.Close()
+
+		body, err := io.ReadAll(response.Body)
+		if err != nil {
+			return err
+		}
+		var omdb OMBDResponse
+		if err := json.Unmarshal(body, &omdb); err != nil {
+			return err
+		}
+
+		rating, _ := strconv.ParseFloat(omdb.Rating, 64)
+		res := &MovieRatingResponse{
+			Rating: rating,
+		}
+		return c.JSON(res)
+	})
+	s.app.Get("/ping", func(c *fiber.Ctx) error {
+		return c.SendString("pong")
+	})
+}
+
+func (s *Server) start(port int) {
+	if err := s.app.Listen(fmt.Sprintf(":%v", port)); err != nil {
+		panic(err)
+	}
+}
+</file>
+
+<file path="backend/node/types.go">
+package main
+
+import (
+	"net/http"
+
+	"github.com/gofiber/fiber/v2"
+)
+
+type Server struct {
+	app    *fiber.App
+	client *http.Client
+}
+
+type MovieRatingResponse struct {
+	Rating float64 `json:"rating"`
+}
+
+type OMBDResponse struct {
+	Rating string `json:"imdbRating"`
+}
+</file>
+
+<file path="services/getMovieRating.go">
+package services
+
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"sync/atomic"
+
+	"github.com/Em1rGuven/loadBalancer/storage"
+	"github.com/gofiber/fiber/v2"
+)
+
+type ServiceContainer struct {
+	backends []*storage.Backend
+	client   *http.Client
+	counter  atomic.Uint32
+}
+
+func (s *ServiceContainer) GetMovieRating(c *fiber.Ctx) error {
+	port, err := s.RoundRobin()
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{
+			"err": err.Error(),
+		})
+	}
+
+	req, err := http.NewRequest("GET", fmt.Sprintf("http://localhost:%v/rating/%v", port, c.Params("movie")), nil)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{
+			"err": err.Error(),
+		})
+	}
+	response, err := s.client.Do(req)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{
+			"err": err.Error(),
+		})
+	} else if response.StatusCode >= 300 {
+		return c.Status(response.StatusCode).JSON(fiber.Map{
+			"err": "unknown error",
+		})
+	}
+	defer response.Body.Close()
+
+	payload, err := io.ReadAll(response.Body)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{
+			"err": err.Error(),
+		})
+	}
+
+	res := &storage.MovieRatingResponse{}
+	if err := json.Unmarshal(payload, res); err != nil {
+		return c.Status(500).JSON(fiber.Map{
+			"err": err.Error(),
+		})
+	}
+	return c.JSON(res)
+}
+
+func (s *ServiceContainer) RoundRobin() (int, error) {
+	n := len(s.backends)
+	if n == 0 {
+		return 0, fmt.Errorf("no backends configured")
+	}
+
+	for i := 0; i < n; i++ {
+		idx := s.counter.Add(1)
+		backend := s.backends[idx%uint32(n)]
+
+		if backend.IsAlive.Load() {
+			return backend.Port, nil
+		}
+	}
+	return 0, fmt.Errorf("no active backends available")
+}
+</file>
+
+<file path="backend/node/main.go">
+package main
+
+import (
+	"github.com/spf13/cobra"
+)
+
+const API_KEY = "2a007225"
+
+var port int
+var rootCmd = &cobra.Command{
+	Use:   "app",
+	Short: "API sunucusu",
+	Run: func(cmd *cobra.Command, args []string) {
+		server := newServer()
+		server.start(port)
+	},
+}
+
+func init() {
+	rootCmd.Flags().IntVarP(&port, "port", "p", 8081, "Sunucunun dinleyeceği port")
+}
+
+func main() {
+	if err := rootCmd.Execute(); err != nil {
+		panic(err)
+	}
+}
+</file>
+
+<file path="services/newServiceContainer.go">
+package services
+
+import (
+	"net/http"
+
+	"github.com/Em1rGuven/loadBalancer/storage"
+)
+
+func NewServiceContainer(backends []*storage.Backend, client *http.Client) *ServiceContainer {
+	return &ServiceContainer{
+		backends: backends,
+		client:   client,
+	}
+}
+</file>
+
+<file path="go.mod">
+module github.com/Em1rGuven/loadBalancer
+
+go 1.26.5
+
+require github.com/gofiber/fiber/v2 v2.52.14 // direct
+
+require (
+	github.com/andybalholm/brotli v1.1.0 // indirect
+	github.com/google/uuid v1.6.0 // indirect
+	github.com/inconshreveable/mousetrap v1.1.0 // indirect
+	github.com/klauspost/compress v1.17.9 // indirect
+	github.com/mattn/go-colorable v0.1.13 // indirect
+	github.com/mattn/go-isatty v0.0.20 // indirect
+	github.com/mattn/go-runewidth v0.0.16 // indirect
+	github.com/rivo/uniseg v0.2.0 // indirect
+	github.com/spf13/cobra v1.10.2 // indirect
+	github.com/spf13/pflag v1.0.10 // indirect
+	github.com/valyala/bytebufferpool v1.0.0 // indirect
+	github.com/valyala/fasthttp v1.51.0 // indirect
+	github.com/valyala/tcplisten v1.0.0 // indirect
+	golang.org/x/sys v0.28.0 // indirect
+)
+</file>
+
+<file path="healthCheck.go">
+package main
+
+import (
+	"fmt"
+	"net/http"
+	"time"
+
+	"github.com/Em1rGuven/loadBalancer/storage"
+)
+
+func (s *Server) healthCheck() {
+	for _, backend := range s.backends {
+		backend.IsAlive.Store(true)
+	}
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		for _, backend := range s.backends {
+			go func(backend *storage.Backend) {
+				req, err := http.NewRequest("GET", fmt.Sprintf("http://localhost:%v/ping", backend.Port), nil)
+				if err != nil {
+					return
+				}
+
+				response, err := s.healthChecker.Do(req)
+				if err != nil {
+					backend.IsAlive.Store(false)
+				} else {
+					backend.IsAlive.Store(response.StatusCode == 200)
+					response.Body.Close()
+				}
+			}(backend)
+		}
+	}
+}
+</file>
+
+<file path="main.go">
+package main
+
+// Bu bir Reverse Proxy (Load Balancer).
+// Bu sunucuya gelen istekler o an sırası gelen ve uygun olan node'da işlenir ve cevabı da buradan verilir.
+func main() {
+	server := newServer()
+	server.start(8080)
+}
+</file>
+
+<file path="backend/node/go.mod">
+module imdb_node
+
+go 1.26.5
+
+require (
+	github.com/gofiber/fiber/v2 v2.52.14
+	github.com/spf13/cobra v1.10.2
+)
+
+require (
+	github.com/andybalholm/brotli v1.1.0 // indirect
+	github.com/google/uuid v1.6.0 // indirect
+	github.com/inconshreveable/mousetrap v1.1.0 // indirect
+	github.com/klauspost/compress v1.17.9 // indirect
+	github.com/mattn/go-colorable v0.1.13 // indirect
+	github.com/mattn/go-isatty v0.0.20 // indirect
+	github.com/mattn/go-runewidth v0.0.16 // indirect
+	github.com/rivo/uniseg v0.2.0 // indirect
+	github.com/spf13/pflag v1.0.9 // indirect
+	github.com/valyala/bytebufferpool v1.0.0 // indirect
+	github.com/valyala/fasthttp v1.51.0 // indirect
+	github.com/valyala/tcplisten v1.0.0 // indirect
+	golang.org/x/sys v0.28.0 // indirect
+)
+</file>
+
+<file path="storage/storage.go">
+package storage
+
+import (
+	"sync/atomic"
+)
+
+type Backend struct {
+	Port    int
+	IsAlive atomic.Bool
+}
+
+type MovieRatingResponse struct {
+	Rating float64 `json:"rating"`
+}
+</file>
+
+<file path="server.go">
+package main
+
+import (
+	"fmt"
+	"net/http"
+	"time"
+
+	"github.com/Em1rGuven/loadBalancer/services"
+	"github.com/Em1rGuven/loadBalancer/storage"
+	"github.com/gofiber/fiber/v2"
+)
+
+type Server struct {
+	app              *fiber.App
+	serviceContainer *services.ServiceContainer
+	client           *http.Client
+	healthChecker    *http.Client
+	backends         []*storage.Backend
+}
+
+func newServer() *Server {
+	app := fiber.New()
+	client := &http.Client{Timeout: 4 * time.Second}
+	healthChecker := &http.Client{Timeout: 1 * time.Second}
+	backends := []*storage.Backend{
+		{Port: 8081},
+		{Port: 8082},
+		{Port: 8083},
+	}
+
+	server := &Server{
+		app:              app,
+		serviceContainer: services.NewServiceContainer(backends, client),
+		client:           client,
+		healthChecker:    healthChecker,
+		backends:         backends,
+	}
+	server.routes()
+	return server
+}
+
+func (s *Server) start(port int) {
+	go s.healthCheck()
+	if err := s.app.Listen(fmt.Sprintf(":%v", port)); err != nil {
+		panic(err)
+	}
+}
+
+func (s *Server) routes() {
+	s.app.Get("/rating/:movie", func(c *fiber.Ctx) error {
+		return s.serviceContainer.GetMovieRating(c)
+	})
+}
+</file>
+
+</files>

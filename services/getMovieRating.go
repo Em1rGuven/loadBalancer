@@ -17,7 +17,7 @@ type ServiceContainer struct {
 	counter  atomic.Uint32
 }
 
-func (s *ServiceContainer) GetMovieScore(c *fiber.Ctx) error {
+func (s *ServiceContainer) GetMovieRating(c *fiber.Ctx) error {
 	port, err := s.RoundRobin()
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{
@@ -25,7 +25,7 @@ func (s *ServiceContainer) GetMovieScore(c *fiber.Ctx) error {
 		})
 	}
 
-	req, err := http.NewRequest("GET", fmt.Sprintf("http://localhost:%v/bpm/%v", port, c.Params("song")), nil)
+	req, err := http.NewRequest("GET", fmt.Sprintf("http://localhost:%v/rating/%v", port, c.Params("movie")), nil)
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{
 			"err": err.Error(),
@@ -50,7 +50,7 @@ func (s *ServiceContainer) GetMovieScore(c *fiber.Ctx) error {
 		})
 	}
 
-	res := &storage.MovieScoreResponse{}
+	res := &storage.MovieRatingResponse{}
 	if err := json.Unmarshal(payload, res); err != nil {
 		return c.Status(500).JSON(fiber.Map{
 			"err": err.Error(),

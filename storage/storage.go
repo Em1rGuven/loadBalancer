@@ -9,8 +9,6 @@ type Backend struct {
 	IsAlive atomic.Bool
 }
 
-type MovieScoreResponse struct {
-	Artist string `json:"artist"`
-	Song   string `json:"song"`
-	BPM    int    `json:"bpm"`
+type MovieRatingResponse struct {
+	Rating float64 `json:"rating"`
 }
