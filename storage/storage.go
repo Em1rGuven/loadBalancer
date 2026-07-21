@@ -9,7 +9,7 @@ type Backend struct {
 	IsAlive atomic.Bool
 }
 
-type SongBPMResponse struct {
+type MovieScoreResponse struct {
 	Artist string `json:"artist"`
 	Song   string `json:"song"`
 	BPM    int    `json:"bpm"`

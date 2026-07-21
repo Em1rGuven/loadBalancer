@@ -47,7 +47,7 @@ func (s *Server) start(port int) {
 }
 
 func (s *Server) routes() {
-	s.app.Get("/bpm/:song", func(c *fiber.Ctx) error {
-		return s.serviceContainer.GetSongBPM(c)
+	s.app.Get("/score/:movie", func(c *fiber.Ctx) error {
+		return s.serviceContainer.GetMovieScore(c)
 	})
 }

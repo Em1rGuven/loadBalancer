@@ -17,7 +17,7 @@ type ServiceContainer struct {
 	counter  atomic.Uint32
 }
 
-func (s *ServiceContainer) GetSongBPM(c *fiber.Ctx) error {
+func (s *ServiceContainer) GetMovieScore(c *fiber.Ctx) error {
 	port, err := s.RoundRobin()
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{
@@ -50,7 +50,7 @@ func (s *ServiceContainer) GetSongBPM(c *fiber.Ctx) error {
 		})
 	}
 
-	res := &storage.SongBPMResponse{}
+	res := &storage.MovieScoreResponse{}
 	if err := json.Unmarshal(payload, res); err != nil {
 		return c.Status(500).JSON(fiber.Map{
 			"err": err.Error(),
